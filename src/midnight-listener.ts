@@ -11,31 +11,31 @@ import type { MidnightAttestation, MidnightContractAction } from './types.js';
 
 type AttestationHandler = (attestation: MidnightAttestation) => Promise<void>;
 
+/** Decode HexEncoded string from Indexer to UTF-8 */
+function hexToUtf8(hex: string): string {
+  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
+  return Buffer.from(clean, 'hex').toString('utf-8').replace(/\0/g, '');
+}
+
 const SUBSCRIPTION_QUERY = `
-  subscription ComplianceRegistryActions($address: String!, $fromBlock: Int) {
+  subscription ComplianceRegistryActions($address: HexEncoded!, $offset: BlockOffset) {
     contractActions(
       address: $address
-      offset: { height: $fromBlock }
+      offset: $offset
     ) {
       __typename
       ... on ContractCall {
         address
         state
-        zswapState
         entryPoint
-        unshieldedBalances {
-          tokenType
-          amount
-        }
+      }
+      ... on ContractDeploy {
+        address
+        state
       }
       ... on ContractUpdate {
         address
         state
-        zswapState
-        unshieldedBalances {
-          tokenType
-          amount
-        }
       }
     }
   }
@@ -98,7 +98,9 @@ export class MidnightListener {
         query: SUBSCRIPTION_QUERY,
         variables: {
           address: config.midnight.complianceRegistryAddress,
-          fromBlock: config.relayer.startFromBlock,
+          offset: config.relayer.startFromBlock > 0
+            ? { height: config.relayer.startFromBlock }
+            : undefined,
         },
       },
       {
@@ -124,12 +126,16 @@ export class MidnightListener {
   }
 
   private async handleAction(action: MidnightContractAction): Promise<void> {
-    console.log(`[listener] Evento recebido: ${action.__typename} | entryPoint: ${action.entryPoint ?? 'n/a'}`);
+    // entryPoint comes as HexEncoded from Indexer — decode to UTF-8 for comparison
+    const entryPointHex = action.entryPoint;
+    const entryPointName = entryPointHex ? hexToUtf8(entryPointHex) : undefined;
 
-    // Filtra somente chamadas ao register_attestation
+    console.log(`[listener] Evento recebido: ${action.__typename} | entryPoint: ${entryPointName ?? 'n/a'} (hex: ${entryPointHex ?? 'n/a'})`);
+
+    // Filtra somente chamadas ao registerAttestation
     const isAttestationCall =
       action.__typename === 'ContractCall' &&
-      action.entryPoint === config.midnight.attestationEntryPoint;
+      entryPointName === config.midnight.attestationEntryPoint;
 
     // ContractUpdate também pode indicar mudança de estado após attestation
     const isStateUpdate = action.__typename === 'ContractUpdate';
@@ -141,6 +147,14 @@ export class MidnightListener {
 
     this.blockTracker++;
     const blockHeight = this.blockTracker; // TODO: extrair do evento quando disponível
+
+    // TODO: DIAGNÓSTICO — remover após B.4
+    console.log('[DIAG] state typeof    :', typeof action.state);
+    console.log('[DIAG] state isBuffer  :', Buffer.isBuffer(action.state));
+    console.log('[DIAG] state isUint8   :', action.state instanceof Uint8Array);
+    console.log('[DIAG] state byteLength:', (action.state as any)?.byteLength ?? 'n/a');
+    console.log('[DIAG] state length    :', action.state?.length ?? 'n/a');
+    console.log('[DIAG] state[:80]      :', JSON.stringify(action.state).slice(0, 80));
 
     const attestation = parseContractState(action, blockHeight, 'pending');
     if (!attestation) {

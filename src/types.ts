@@ -31,14 +31,13 @@ export interface MidnightAttestation {
   txHash: string;
 }
 
-// Estado retornado pelo ContractCall do Indexer GraphQL
+// Estado retornado pelo ContractAction do Indexer GraphQL v1
+// Todos os campos são HexEncoded (string hex sem prefixo 0x)
 export interface MidnightContractAction {
   __typename: 'ContractCall' | 'ContractDeploy' | 'ContractUpdate';
-  address: string;
-  state: string;        // hex-encoded estado público do ledger
-  entryPoint?: string;  // ex: "register_attestation"
-  zswapState?: string;
-  unshieldedBalances?: Array<{ tokenType: string; amount: string }>;
+  address: string;      // HexEncoded contract address
+  state: string;        // HexEncoded ledger state
+  entryPoint?: string;  // HexEncoded entry point name (ContractCall only)
 }
 
 // Resultado de um broadcast para uma chain EVM

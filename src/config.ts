@@ -11,7 +11,7 @@ function requireEnv(key: string): string {
 export const config = {
   midnight: {
     indexerWs: process.env.MIDNIGHT_INDEXER_WS
-      ?? 'wss://indexer.testnet.midnight.network/api/v3/graphql/ws',
+      ?? 'wss://indexer.preprod.midnight.network/api/v3/graphql/ws',
     complianceRegistryAddress: requireEnv('COMPLIANCE_REGISTRY_ADDRESS'),
     // Ponto de entrada do Compact que registra attestations
     attestationEntryPoint: process.env.ATTESTATION_ENTRY_POINT
