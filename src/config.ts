@@ -40,12 +40,11 @@ export const config = {
       registryAddress: requireEnv('POLKADOT_REGISTRY_ADDRESS'),
       chainId: 420420421,
     },
-    // Hedera será adicionado pós-WDK
-    // {
-    //   name: 'hedera-testnet',
-    //   rpc: 'https://testnet.hashio.io/api',
-    //   registryAddress: requireEnv('HEDERA_REGISTRY_ADDRESS'),
-    //   chainId: 296,
-    // },
+    {
+      name: 'hedera-testnet',
+      rpc: process.env.HEDERA_RPC ?? 'https://testnet.hashio.io/api',
+      registryAddress: requireEnv('HEDERA_REGISTRY_ADDRESS'),
+      chainId: 296,
+    },
   ] as EVMChainConfig[],
 };
