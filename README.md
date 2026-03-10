@@ -1,38 +1,84 @@
-# DPO2U Relayer
+# DPO2U Midnight Relayer
 
 > This project is built on the Midnight Network.
 
-**Midnight Network → EVM compliance attestation bridge (Base, Polkadot, Hedera)**
+**Privacy-preserving compliance bridge: Midnight Network → EVM chains**
 
-The DPO2U Relayer is the first custom bridge that reads ZK-private compliance attestations from the Midnight Network and propagates them to EVM chains. Any DeFi protocol can call `isCompliant(address)` on Base, Polkadot Hub, or Hedera — without ever touching the private data stored on Midnight.
+The DPO2U Midnight Relayer bridges zero-knowledge compliance attestations from the [Midnight Network](https://midnight.network/) to EVM-compatible chains. Any DeFi protocol can verify compliance on-chain by calling `getAttestation()` — without accessing the private data stored on Midnight.
+
+## Supported Chains
+
+| Chain | Status |
+|---|---|
+| Base Sepolia | Live |
+| Polkadot Hub | Live |
+| Hedera Testnet | Planned |
 
 ---
 
-## How it works
+## How It Works
 
 ```
-MIDNIGHT PREPROD / MAINNET
+Midnight Network (ZK Layer)
   ComplianceRegistry.compact
-    registerAttestation() called by the AuditorAgent (AI compliance agent)
+    registerAttestation() → stores compliance score with ZK privacy
          │
          │  GraphQL WebSocket subscription
-         │  Midnight Indexer v3 — ContractCall events
+         │  Midnight Indexer v3
          ▼
-DPO2U RELAYER (Node.js)
-  1. MidnightListener     subscribes to ContractCall events via GraphQL WS
-  2. StateParser          decodes public ledger state using @midnight-ntwrk/compact-runtime
-  3. EVMBroadcaster       writes registerAttestationFromMidnight() in parallel
+DPO2U Relayer (this project)
+  1. MidnightListener     subscribes to new attestation events
+  2. StateParser           decodes Compact ledger state (4 fallback decoders)
+  3. EVMBroadcaster        writes attestations to EVM chains in parallel
          │
-         ├──► Base Sepolia    → ComplianceRegistryExtended.sol  ✅
-         ├──► Polkadot Hub    → ComplianceRegistryExtended.sol  ✅
-         └──► Hedera Testnet  → ComplianceRegistryExtended.sol  (sprint 23/03)
+         ├──► Base Sepolia    → ComplianceRegistryExtended.sol
+         ├──► Polkadot Hub    → ComplianceRegistryExtended.sol
+         └──► Hedera Testnet  → ComplianceRegistryExtended.sol
+```
+
+---
+
+## Integration Guide
+
+### For DeFi protocols: query compliance on EVM
+
+Once attestations are relayed, any smart contract can check compliance:
+
+```solidity
+import {ComplianceRegistryExtended} from "./ComplianceRegistryExtended.sol";
+
+// Query an attestation by ID
+ComplianceRegistryExtended registry = ComplianceRegistryExtended(REGISTRY_ADDRESS);
+ComplianceRegistryExtended.Attestation memory att = registry.getAttestation(attestationId);
+
+// Check compliance
+require(att.exists, "No attestation found");
+require(att.score >= 80, "Below compliance threshold");
+require(att.validUntil > block.timestamp, "Attestation expired");
+```
+
+### Attestation struct on EVM
+
+```solidity
+struct Attestation {
+    bytes32 orgHash;        // Hash of org identifier (e.g. CNPJ)
+    string  regulation;     // "LGPD" | "GDPR" | "MiCA"
+    uint256 score;          // 0–100
+    uint256 validUntil;     // Unix timestamp
+    bytes32 agentDid;       // DID of the auditor agent
+    string  evidenceCid;    // IPFS CID of evidence document
+    bytes32 commitment;     // ZK commitment from Midnight (proof without revealing)
+    string  source;         // "midnight"
+    uint256 timestamp;      // Relay timestamp
+    bool    exists;
+}
 ```
 
 ---
 
 ## Compact Ledger Structure
 
-Parser built and calibrated against the real `ComplianceRegistry.compact`:
+The relayer reads from the `ComplianceRegistry.compact` contract on Midnight:
 
 ```compact
 export ledger attestation_scores: Map<Bytes<32>, Uint<64>>;
@@ -48,46 +94,44 @@ export circuit registerAttestation(
 ): []
 ```
 
----
-
-## State Decoder
-
-`src/state-parser-runtime.ts` uses `@midnight-ntwrk/compact-runtime@0.14.0` to decode the binary ledger state returned by the Midnight Indexer v3:
-
-```typescript
-// Primary path: compact-runtime decoder
-const parsed = decodeLedgerState(stateHex);
-// StateValue.decode(bytes) → navigates the typed ledger Map
-// StateMap.get(AlignedValue) → fetches field by key
-// AlignedValue = { value: Array<Uint8Array>, alignment: Alignment[] }
-```
-
-4 fallback paths in cascade: compact-runtime → JSON → base64 → hex.
+The `StateParser` decodes the binary ledger state using `@midnight-ntwrk/compact-runtime@0.14.0`, with 3 additional fallback decoders (JSON → base64 → hex).
 
 ---
 
 ## Trust Model
 
-**Phase 1 (current):** Trusted Relayer. A Node.js process operated by DPO2U signs EVM transactions with a controlled private key. EVM contracts only accept attestations from the configured `trustedRelayer` address.
-
-**Phase 2 (post-mainnet):** Decentralized bridge via Gnosis Safe multisig → MPC threshold signatures → native ZK proof verification on EVM.
+| Phase | Model | Description |
+|---|---|---|
+| **Phase 1** (current) | Trusted Relayer | A Node.js process signs EVM transactions with a controlled private key. EVM contracts only accept calls from the configured `trustedRelayer` address. |
+| **Phase 2** (post-mainnet) | Decentralized | Gnosis Safe multisig → MPC threshold signatures → native ZK proof verification on EVM. |
 
 ---
+
+## Prerequisites
+
+- **Node.js** ≥ 18
+- **npm** ≥ 9
+- **Midnight wallet** with tDUST (for Preprod)
+- **EVM wallet** with testnet funds on target chains
+- Access to a **Midnight Indexer v3** endpoint
 
 ## Installation
 
 ```bash
+git clone https://github.com/fredericosanntana/dpo2u-midnight-relayer.git
+cd dpo2u-midnight-relayer
 npm install
 cp .env.example .env
-# Edit .env with contract addresses and relayer private key
 ```
+
+Edit `.env` with your configuration (see below).
 
 ## Usage
 
 ```bash
-npm run start:watch   # development with hot reload
-npm start             # production
-npm test              # 7/7 tests
+npm run start:watch   # Development with hot reload
+npm start             # Production
+npm test              # Run tests (7/7 passing)
 ```
 
 ## Environment Variables
@@ -98,65 +142,58 @@ npm test              # 7/7 tests
 | `COMPLIANCE_REGISTRY_ADDRESS` | Compact contract address on Midnight |
 | `ATTESTATION_ENTRY_POINT` | Circuit entry point name (`registerAttestation`) |
 | `RELAYER_PRIVATE_KEY` | EVM relayer private key |
-| `BASE_REGISTRY_ADDRESS` | ComplianceRegistryExtended on Base Sepolia |
-| `POLKADOT_REGISTRY_ADDRESS` | ComplianceRegistryExtended on Polkadot Hub |
-| `HEDERA_REGISTRY_ADDRESS` | ComplianceRegistryExtended on Hedera Testnet |
-| `BASE_RPC_URL` | Base Sepolia RPC |
-| `POLKADOT_RPC_URL` | Polkadot Hub Testnet RPC |
-| `HEDERA_RPC_URL` | Hedera JSON-RPC Relay (`https://testnet.hashio.io/api`) |
+| `BASE_REGISTRY_ADDRESS` | ComplianceRegistryExtended address on Base Sepolia |
+| `POLKADOT_REGISTRY_ADDRESS` | ComplianceRegistryExtended address on Polkadot Hub |
+| `HEDERA_REGISTRY_ADDRESS` | ComplianceRegistryExtended address on Hedera Testnet |
+| `BASE_RPC_URL` | Base Sepolia RPC endpoint |
+| `POLKADOT_RPC_URL` | Polkadot Hub Testnet RPC endpoint |
+| `HEDERA_RPC_URL` | Hedera JSON-RPC Relay endpoint |
 
-## Repository Structure
+---
+
+## Project Structure
 
 ```
-dpo2u-relayer/
+dpo2u-midnight-relayer/
 ├── src/
 │   ├── index.ts                 # Entry point
-│   ├── midnight-listener.ts     # GraphQL WebSocket (Indexer v3)
-│   ├── state-parser.ts          # Parser with 4 fallback paths
+│   ├── midnight-listener.ts     # GraphQL WebSocket subscription (Indexer v3)
+│   ├── state-parser.ts          # Ledger state parser with 4 fallback paths
 │   ├── state-parser-runtime.ts  # Decoder via @midnight-ntwrk/compact-runtime
-│   ├── evm-broadcaster.ts       # Parallel broadcast via ethers.js
-│   ├── config.ts                # .env configuration
-│   └── types.ts                 # Shared types
+│   ├── evm-broadcaster.ts       # Parallel broadcast to EVM chains
+│   ├── config.ts                # Environment configuration
+│   └── types.ts                 # Shared TypeScript types
 ├── contracts/
-│   └── ComplianceRegistryExtended.sol
+│   └── ComplianceRegistryExtended.sol  # EVM contract for relayed attestations
 ├── test/
-│   └── state-parser.test.ts     # 7/7 tests
-└── .env.example
-```
-
-## Adding Hedera (sprint 23/03)
-
-Hedera Testnet is EVM-compatible via JSON-RPC Relay. Three changes required:
-
-**1. `config.ts`:**
-```typescript
-hedera: {
-  rpcUrl:          process.env.HEDERA_RPC_URL ?? 'https://testnet.hashio.io/api',
-  registryAddress: process.env.HEDERA_REGISTRY_ADDRESS ?? '',
-  chainId:         296,
-}
-```
-
-**2. `evm-broadcaster.ts`:** add `'hedera'` to the chains array.
-
-**3. Deploy:**
-```bash
-npx hardhat run scripts/deploy.ts --network hederaTestnet
+│   └── state-parser.test.ts     # Unit tests
+├── .env.example
+├── package.json
+└── tsconfig.json
 ```
 
 ## Roadmap
 
 - [x] GraphQL WebSocket subscription to Midnight Indexer v3
-- [x] State decoder via `@midnight-ntwrk/compact-runtime` with 4 fallbacks
+- [x] State decoder via `@midnight-ntwrk/compact-runtime` with fallback paths
 - [x] Parallel broadcast to Base Sepolia and Polkadot Hub
 - [x] Per-block idempotency (replay protection)
 - [x] Automatic WebSocket reconnect
-- [x] 7/7 unit tests
-- [ ] Integration test against live Indexer v3 (Gap 2)
-- [ ] Hedera Testnet as destination chain (23/03)
-- [ ] `regulation` and `valid_until` fields in Compact ledger (Gap 3)
-- [ ] Multisig as `trustedRelayer` (Gap 1 — before production)
-- [ ] Decentralized bridge with threshold signatures (post-mainnet)
+- [x] Unit tests (7/7 passing)
+- [ ] Integration tests against live Indexer v3
+- [ ] Hedera Testnet as destination chain
+- [ ] Extended Compact ledger fields (`regulation`, `valid_until`)
+- [ ] Multisig as `trustedRelayer`
+- [ ] Decentralized bridge with threshold signatures
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork this repository
+2. Create a feature branch (`git checkout -b feature/my-feature`)
+3. Commit your changes
+4. Open a Pull Request
 
 ## License
 
